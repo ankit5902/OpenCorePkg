@@ -89,7 +89,7 @@ ConsoleHandleProtocol (
   return EFI_UNSUPPORTED;
 }
 
-VOID
+EFI_STATUS
 OcProvideConsoleGop (
   IN BOOLEAN  Route
   )
@@ -132,7 +132,7 @@ OcProvideConsoleGop (
     //
     if (OriginalGop->Mode->MaxMode > 0) {
       mConsoleGraphicsOutput = OriginalGop;
-      return;
+      return EFI_ALREADY_STARTED;
     }
 
     DEBUG ((
@@ -150,7 +150,7 @@ OcProvideConsoleGop (
 
     if (EFI_ERROR (Status)) {
       DEBUG ((DEBUG_INFO, "OCC: No handles with GOP protocol - %r\n", Status));
-      return;
+      return EFI_UNSUPPORTED;
     }
 
     Status = EFI_NOT_FOUND;
@@ -195,6 +195,7 @@ OcProvideConsoleGop (
   } else {
     DEBUG ((DEBUG_WARN, "OCC: Missing compatible GOP - %r\n", Status));
   }
+  return Status;
 }
 
 STATIC
@@ -337,9 +338,9 @@ OcReconnectConsole (
   UINTN       Index;
 
   //
-  // On some firmwares When we change mode on GOP, we need to reconnect the drivers
-  // which produce simple text out. Otherwise, they won't produce text based on the
-  // new resolution.
+  // When we change the GOP mode on some types of firmware, we need to reconnect the
+  // drivers that produce simple text out as otherwise, they will not produce text
+  // at the new resolution.
   //
   // Needy reports that boot.efi seems to work fine without this block of code.
   // However, I believe that UEFI specification does not provide any standard way
@@ -348,8 +349,8 @@ OcReconnectConsole (
   // We can move this to quirks if it causes problems, but I believe the code below
   // is legit.
   //
-  // Note: on APTIO IV boards this block of code may result in black screen when launching
-  // OpenCore from Shell, thus it is optional.
+  // Note: this block of code may result in black screens on APTIO IV boards when
+  // launching OpenCore from the Shell. Hence it is optional.
   //
 
   Status = gBS->LocateHandleBuffer (
@@ -399,6 +400,11 @@ OcUseDirectGop (
   if (EFI_ERROR (Status)) {
     DEBUG ((DEBUG_INFO, "OCC: Cannot find console GOP for direct GOP - %r\n", Status));
     return Status;
+  }
+
+  if (Gop->Mode->Info->PixelFormat == PixelBltOnly) {
+    DEBUG ((DEBUG_INFO, "OCC: This GOP does not support direct rendering\n"));
+    return EFI_UNSUPPORTED;
   }
 
   mFramebufferContext = DirectGopFromTarget (Gop->Mode->FrameBufferBase, Gop->Mode->Info);

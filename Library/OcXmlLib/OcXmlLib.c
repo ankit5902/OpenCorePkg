@@ -52,6 +52,8 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 //
 #define XML_EXPORT_MIN_ALLOCATION_SIZE 4096
 
+#define XML_PLIST_HEADER  "<?xml version=\"1.0\" encoding=\"UTF-8\"?><!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">"
+
 struct XML_NODE_LIST_;
 struct XML_PARSER_;
 
@@ -649,7 +651,9 @@ XmlParseTagOpen (
   CONST CHAR8 **Attributes
   )
 {
-  CHAR8  Current;
+  CHAR8   Current;
+  CHAR8   Next;
+  BOOLEAN IsComment;
 
   XML_PARSER_INFO (Parser, "tag_open");
 
@@ -680,15 +684,65 @@ XmlParseTagOpen (
     if (Current != '?' && Current != '!') {
       break;
     }
+    
+    //
+    // A crazy XML comment may look like this:
+    // <!-- som>>><<<<ething -->
+    //
+    // '<' has already been consumed a bit earlier, now continue to check '!',
+    // and then the two '-'.
+    //
+    IsComment = FALSE;
+    if (Current == '!') {
+      //
+      // Consume one more byte to check the two '-'.
+      // Now "<!--" is guaranteed.
+      //
+      XmlParserConsume (Parser, 1);
+      Current   = XmlParserPeek (Parser, CURRENT_CHARACTER);
+      Next      = XmlParserPeek (Parser, NEXT_CHARACTER);
+      if (Current == '-' && Next == '-') {
+        //
+        // Now consume Current and Next which take up 2 bytes.
+        //
+        XmlParserConsume (Parser, 2);
+        IsComment = TRUE;
+      }
+    }
 
     //
     // Skip the control sequence.
+    // NOTE: This inner loop is created mainly for code simplification.
     //
-    do {
-      XmlParserConsume (Parser, 1);
-    } while (XmlParserPeek (Parser, CURRENT_CHARACTER) != '>' && Parser->Position < Parser->Length);
-    XmlParserConsume (Parser, 1);
+    while (Parser->Position < Parser->Length) {
+      if (IsComment) {
+        //
+        // Scan "-->" for comments and break if matched.
+        //
+        if (XmlParserPeek (Parser, CURRENT_CHARACTER) == '-'
+            && XmlParserPeek (Parser, NEXT_CHARACTER) == '-'
+            && XmlParserPeek (Parser, 2) == '>') {
+          //
+          // "-->" should all be consumed, which takes 3 bytes.
+          //
+          XmlParserConsume (Parser, 3);
+          break;
+        }
+      } else {
+        //
+        // For non-comments, simply match '>'.
+        //
+        if (XmlParserPeek (Parser, CURRENT_CHARACTER) == '>') {
+          XmlParserConsume (Parser, 1);
+          break;
+        }
+      }
 
+      //
+      // Consume each byte normally.
+      //
+      XmlParserConsume (Parser, 1);
+    }
   } while (Parser->Position < Parser->Length);
 
   //
@@ -1146,15 +1200,18 @@ CHAR8 *
 XmlDocumentExport (
   XML_DOCUMENT  *Document,
   UINT32        *Length,
-  UINT32        Skip
+  UINT32        Skip,
+  BOOLEAN       PrependPlistInfo
   )
 {
   CHAR8   *Buffer;
+  CHAR8   *NewBuffer;
   UINT32  AllocSize;
   UINT32  CurrentSize;
+  UINT32  NewSize;
 
   AllocSize = Document->Buffer.Length + 1;
-  Buffer    = AllocatePool (AllocSize);
+  Buffer = AllocatePool (AllocSize);
   if (Buffer == NULL) {
     XML_USAGE_ERROR ("XmlDocumentExport::failed to allocate");
     return NULL;
@@ -1163,12 +1220,41 @@ XmlDocumentExport (
   CurrentSize = 0;
   XmlNodeExportRecursive (Document->Root, &Buffer, &AllocSize, &CurrentSize, Skip);
 
+  if (PrependPlistInfo) {
+    //
+    // XmlNodeExportRecursive returns a size that does not include the null terminator,
+    // but the allocated buffer does. During this reallocation, we count the null terminator
+    // of the plist header instead to ensure allocated buffer is the proper size.
+    //
+    if (OcOverflowAddU32 (CurrentSize, L_STR_SIZE (XML_PLIST_HEADER), &NewSize)) {
+      FreePool (Buffer);
+      return NULL;
+    }
+
+    NewBuffer = AllocatePool (NewSize);
+    if (NewBuffer == NULL) {
+      FreePool (Buffer);
+      XML_USAGE_ERROR ("XmlDocumentExport::failed to allocate");
+      return NULL;
+    }
+    CopyMem (NewBuffer, XML_PLIST_HEADER, L_STR_SIZE_NT (XML_PLIST_HEADER));
+    CopyMem (&NewBuffer[L_STR_LEN (XML_PLIST_HEADER)], Buffer, CurrentSize);
+    FreePool (Buffer);
+
+    //
+    // Null terminator is not included in size returned by XmlBufferAppend.
+    //
+    CurrentSize = NewSize - 1;
+    Buffer      = NewBuffer;
+  }
+
   if (Length != NULL) {
     *Length = CurrentSize;
   }
 
   //
-  // XmlBufferAppend guarantees one more byte.
+  // Null terminator is not included in size returned by XmlBufferAppend,
+  // but the buffer is allocated to include it.
   //
   Buffer[CurrentSize] = '\0';
 
@@ -1207,6 +1293,18 @@ XmlNodeContent (
   )
 {
   return Node->Real != NULL ? Node->Real->Content : Node->Content;
+}
+
+VOID
+XmlNodeChangeContent (
+  XML_NODE     *Node,
+  CONST CHAR8  *Content
+  )
+{
+  if (Node->Real != NULL) {
+    Node->Real->Content = Content;
+  }
+  Node->Content = Content;
 }
 
 UINT32

@@ -162,7 +162,7 @@ typedef enum {
 
 ///
 /// System language.
-/// String starting with language code (e.g. ru-RU:252).
+/// CHAR8[] String starting with language code (e.g. ru-RU:252).
 /// gAppleBootVariableGuid
 ///
 #define APPLE_PREV_LANG_KBD_VARIABLE_NAME   L"prev-lang:kbd"
@@ -222,6 +222,33 @@ typedef enum {
 /// gAppleBootVariableGuid
 ///
 #define APPLE_BOOT_CAMP_HD_VARIABLE_NAME L"BootCampHD"
+
+///
+/// Boot recovery once on the next restart in the specified mode in ASCII
+/// (not null-terminated):
+/// - locked              --- standard reboot (boot-feature-usage BIT6)
+/// - guest               --- triggered by EfiBoot to perform FV2 "guest" recovery (boot-feature-usage BIT7)
+/// - fde-recovery        --- triggered by EfiBoot to perform FV2 recovery
+/// - fde-password-reset  --- triggered by EfiBoot to perform FV2 password reset
+/// - unused              --- seems to be unused by the firmware, but used often by the users
+/// - secure-boot         --- triggered by EfiBoot to perform recovery after SB failure
+/// gAppleBootVariableGuid
+///
+#define APPLE_RECOVERY_BOOT_MODE_VARIABLE_NAME L"recovery-boot-mode"
+
+///
+/// Startup sound configuration variable.
+/// UINT8: 00 (for unmuted, default) or 01 (for muted).
+/// gAppleBootVariableGuid
+///
+#define APPLE_STARTUP_MUTE_VARIABLE_NAME L"StartupMute"
+
+///
+/// Recovery initiator device path. In general EfiBoot device path that called
+/// reboot to recovery.
+/// gAppleVendorVariableGuid
+///
+#define APPLE_RECOVERY_BOOT_INITIATOR_VARIABLE_NAME L"RecoveryBootInitiator"
 
 ///
 /// A global variable storing the GUID of the APPLE_VENDOR EFI variable scope.

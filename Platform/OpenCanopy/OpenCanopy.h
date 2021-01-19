@@ -127,12 +127,12 @@ struct GUI_DRAWING_CONTEXT_ {
   //
   // Scene objects
   //
-  GUI_OBJ              *Screen;
-  GUI_CURSOR_GET_IMAGE GetCursorImage;
-  GUI_EXIT_LOOP        ExitLoop;
-  LIST_ENTRY           Animations;
-  VOID                 *GuiContext;
-  UINT8                Scale;
+  GUI_OBJ                  *Screen;
+  GUI_CURSOR_GET_IMAGE     GetCursorImage;
+  GUI_EXIT_LOOP            ExitLoop;
+  LIST_ENTRY               Animations;
+  BOOT_PICKER_GUI_CONTEXT  *GuiContext;
+  UINT8                    Scale;
 };
 
 EFI_STATUS
@@ -174,7 +174,7 @@ GuiObjDrawDelegate (
   IN     UINT32                  OffsetY,
   IN     UINT32                  Width,
   IN     UINT32                  Height,
-  IN     BOOLEAN                 ParentRedrawn
+  IN     BOOLEAN                 RequestDraw
   );
 
 GUI_OBJ *
@@ -191,8 +191,8 @@ GuiObjDelegatePtrEvent (
 
 BOOLEAN
 GuiClipChildBounds (
-  IN     INT64   ObjectOffset,
-  IN     UINT32  ObjectLength,
+  IN     INT64   ChildOffset,
+  IN     UINT32  ChildLength,
   IN OUT UINT32  *ReqOffset,
   IN OUT UINT32  *ReqLength
   );
@@ -251,6 +251,11 @@ GuiViewCurrentCursor (
   );
 
 VOID
+GuiRedrawAndFlushScreen (
+  IN OUT GUI_DRAWING_CONTEXT  *DrawContext
+  );
+
+VOID
 GuiDrawLoop (
   IN OUT GUI_DRAWING_CONTEXT  *DrawContext,
   IN     UINT32               TimeoutSeconds
@@ -264,7 +269,7 @@ GuiClearScreen (
 
 EFI_STATUS
 GuiLibConstruct (
-  IN OC_PICKER_CONTEXT  *PickerContet,
+  IN OC_PICKER_CONTEXT  *PickerContext,
   IN UINT32             CursorDefaultX,
   IN UINT32             CursorDefaultY
   );
@@ -305,6 +310,14 @@ UINT32
 GuiGetInterpolatedValue (
   IN CONST GUI_INTERPOLATION  *Interpol,
   IN       UINT64             CurrentTime
+  );
+
+VOID
+GuiGetBaseCoords (
+  IN  GUI_OBJ              *This,
+  IN  GUI_DRAWING_CONTEXT  *DrawContext,
+  OUT INT64                *BaseX,
+  OUT INT64                *BaseY
   );
 
 #endif // OPEN_CANOPY_H

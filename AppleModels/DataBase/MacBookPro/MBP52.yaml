@@ -1,7 +1,7 @@
 BIOSVendor: "Apple Inc."
 BIOSVersion: "MBP52.88Z.008E.B05.0905042202"
 BIOSLegacyVersion: "MBP52.88Z.008E.B05.0905042202"
-BIOSReleaseDate: "05/04/09"
+BIOSReleaseDate: "05/04/2009"
 SystemManufacturer: "Apple Inc."
 SystemProductName: "MacBookPro5,2"
 SystemVersion: "1.0"
@@ -69,7 +69,7 @@ SmcPlatform:
   - 0x00
 # FIXME: check
 SmcEPCI: 0x7B002
-OEMStrings: ""
+OEMStrings: |-
 Specifications:
   CPUCodename:
     - "Penryn"

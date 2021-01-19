@@ -1,7 +1,7 @@
 BIOSVendor: "Apple Inc."
-BIOSVersion: "1539.0.0.0.1"
-BIOSLegacyVersion: "MBP162.88Z.F000.B00.2007121505"
-BIOSReleaseDate: "07/12/2020"
+BIOSVersion: "1554.60.15.0.0"
+BIOSLegacyVersion: "MBP162.88Z.F000.B00.2011302008"
+BIOSReleaseDate: "11/30/2020"
 SystemManufacturer: "Apple Inc."
 SystemProductName: "MacBookPro16,2"
 SystemVersion: "1.0"
@@ -45,17 +45,17 @@ SmcPlatform:
   - 0x00
 OEMStrings: |-
   Apple ROM Version
-    BIOS ID:      MBP162.88Z.F000.B00.2007121505
+    BIOS ID:      MBP162.88Z.F000.B00.2011302008
     Model:        MBP162
-    EFI Version:  1539.0.0.0.1
-    Built by:     root@bb-g8-pdb157
-    Date:         Sun Jul 12 15:05:21 2020
-    Revision:     1539.0.0.0.1 (B&I)
+    EFI Version:  1554.60.15.0.0
+    Built by:     root@bb-g8-pdb127
+    Date:         Mon Nov 30 20:08:12 2020
+    Revision:     1554.60.15 (B&I)
     ROM Version:  F000_B00
     Build Type:   Official Build, RELEASE
-    Compiler:     clang-1103.2.32.82
-    UUID:         DAE2DA1D-0026-3F2C-B090-C709B746D2EE
-    UUID:         4EE0258E-9181-315B-9125-DBC104CB6BB2
+    Compiler:     clang-1200.0.30.4
+    UUID:         C66E4BDF-B087-3F04-BBED-36BF75A552DF
+    UUID:         433ACA54-8C6F-325D-8F4A-102F72091D90
 Specifications:
   CPUCodename:
     - "Ice Lake U"
@@ -82,12 +82,14 @@ AppleModelCode:
   - "ML7M"
   - "ML7J"
   - "ML88"
+  - "0DHT"
 # Note, first board code is used by macserial
 AppleBoardCode:
   - "0000"
 # Note, first year is used by macserial
 AppleModelYear:
   - 2020
+  - 2021
 MinimumOSVersion: "10.15.4"
 MaximumOSVersion: null
 AppleModelId: "J214K"

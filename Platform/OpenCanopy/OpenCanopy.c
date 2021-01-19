@@ -37,12 +37,6 @@ typedef struct {
 } GUI_DRAW_REQUEST;
 
 //
-// Variables to assign the picked volume automatically once menu times out
-//
-extern BOOT_PICKER_GUI_CONTEXT mGuiContext;
-extern GUI_VOLUME_PICKER mBootPicker;
-
-//
 // I/O contexts
 //
 STATIC GUI_OUTPUT_CONTEXT            *mOutputContext    = NULL;
@@ -104,11 +98,11 @@ GuiClipChildBounds (
   ASSERT (ReqOffset != NULL);
   ASSERT (ReqLength != NULL);
 
-  if (ChildLength == 0) {
-    return FALSE;
-  }
-
   if (ChildOffset >= 0) {
+    if (ChildLength == 0) {
+      return FALSE;
+    }
+
     PosChildOffset = (UINT32)ChildOffset;
   } else {
     if ((INT64)ChildLength - (-ChildOffset) <= 0) {
@@ -118,6 +112,8 @@ GuiClipChildBounds (
     PosChildOffset = 0;
     ChildLength    = (UINT32)(ChildLength - (-ChildOffset));
   }
+
+  ASSERT (ChildLength > 0);
 
   NewOffset = *ReqOffset;
   NewLength = *ReqLength;
@@ -193,6 +189,14 @@ GuiObjDrawDelegate (
   ASSERT (This->Width  > OffsetX);
   ASSERT (This->Height > OffsetY);
   ASSERT (DrawContext != NULL);
+
+  if (Width > This->Width - OffsetX) {
+    Width = This->Width - OffsetX;
+  }
+
+  if (Height > This->Height - OffsetY) {
+    Height = This->Height - OffsetY;
+  }
 
   for (
     ChildEntry = GetPreviousNode (&This->Children, &This->Children);
@@ -643,6 +647,8 @@ GuiDrawScreen (
 {
   UINT32 PosX;
   UINT32 PosY;
+  INT64  EffWidth;
+  INT64  EffHeight;
 
   ASSERT (DrawContext != NULL);
   ASSERT (DrawContext->Screen != NULL);
@@ -671,15 +677,10 @@ GuiDrawScreen (
     PosY  = 0;
   }
 
-  if (PosX >= DrawContext->Screen->Width
-   || PosY >= DrawContext->Screen->Height) {
-    return;
-  }
+  EffWidth  = MIN (Width,  (INT64) DrawContext->Screen->Width  - PosX);
+  EffHeight = MIN (Height, (INT64) DrawContext->Screen->Height - PosY);
 
-  Width  = MIN (Width,  DrawContext->Screen->Width  - PosX);
-  Height = MIN (Height, DrawContext->Screen->Height - PosY);
-
-  if (Width == 0 || Height == 0) {
+  if (EffWidth <= 0 || EffHeight <= 0) {
     return;
   }
 
@@ -883,7 +884,9 @@ GuiFlushScreen (
   ASSERT (DrawContext != NULL);
   ASSERT (DrawContext->Screen != NULL);
 
-  GuiRedrawPointer (DrawContext);
+  if (mPointerContext != NULL) {
+    GuiRedrawPointer (DrawContext);
+  }
 
   NumValidDrawReqs = mNumValidDrawReqs;
   ASSERT (NumValidDrawReqs <= ARRAY_SIZE (mDrawRequests));
@@ -956,7 +959,7 @@ GuiRedrawAndFlushScreen (
 
 EFI_STATUS
 GuiLibConstruct (
-  IN OC_PICKER_CONTEXT  *PickerContet,
+  IN OC_PICKER_CONTEXT  *PickerContext,
   IN UINT32             CursorDefaultX,
   IN UINT32             CursorDefaultY
   )
@@ -975,18 +978,20 @@ GuiLibConstruct (
   CursorDefaultX = MIN (CursorDefaultX, OutputInfo->HorizontalResolution - 1);
   CursorDefaultY = MIN (CursorDefaultY, OutputInfo->VerticalResolution   - 1);
 
-  mPointerContext = GuiPointerConstruct (
-    PickerContet,
-    CursorDefaultX,
-    CursorDefaultY,
-    OutputInfo->HorizontalResolution,
-    OutputInfo->VerticalResolution
-    );
-  if (mPointerContext == NULL) {
-    DEBUG ((DEBUG_WARN, "OCUI: Failed to initialise pointer\n"));
+  if ((PickerContext->PickerAttributes & OC_ATTR_USE_POINTER_CONTROL) != 0) {
+    mPointerContext = GuiPointerConstruct (
+      PickerContext,
+      CursorDefaultX,
+      CursorDefaultY,
+      OutputInfo->HorizontalResolution,
+      OutputInfo->VerticalResolution
+      );
+    if (mPointerContext == NULL) {
+      DEBUG ((DEBUG_WARN, "OCUI: Failed to initialise pointer\n"));
+    }
   }
 
-  mKeyContext = GuiKeyConstruct (PickerContet);
+  mKeyContext = GuiKeyConstruct (PickerContext);
   if (mKeyContext == NULL) {
     DEBUG ((DEBUG_WARN, "OCUI: Failed to initialise key input\n"));
   }
@@ -1139,22 +1144,25 @@ GuiDrawLoop (
   CONST LIST_ENTRY    *AnimEntry;
   CONST GUI_ANIMATION *Animation;
   UINT64              LoopStartTsc;
+  UINT64              LastTsc;
+  UINT64              NewLastTsc;
 
   ASSERT (DrawContext != NULL);
 
   mNumValidDrawReqs = 0;
   HoldObject        = NULL;
 
-  GuiRedrawAndFlushScreen (DrawContext);
   //
   // Clear previous inputs.
   //
-  GuiPointerReset (mPointerContext);
+  if (mPointerContext != NULL) {
+    GuiPointerReset (mPointerContext);
+  }
   GuiKeyReset (mKeyContext);
   //
   // Main drawing loop, time and derieve sub-frequencies as required.
   //
-  LoopStartTsc = mStartTsc = AsmReadTsc ();
+  LastTsc = LoopStartTsc = mStartTsc = AsmReadTsc ();
   do {
     if (mPointerContext != NULL) {
       //
@@ -1246,17 +1254,44 @@ GuiDrawLoop (
     //
     GuiFlushScreen (DrawContext);
 
+    NewLastTsc = AsmReadTsc ();
+
+    if (DrawContext->GuiContext->AudioPlaybackTimeout >= 0
+      && DrawContext->GuiContext->PickerContext->PickerAudioAssist) {
+      DrawContext->GuiContext->AudioPlaybackTimeout -= (INT32) (DivU64x32 (
+        GetTimeInNanoSecond (NewLastTsc - LastTsc),
+        1000000
+        ));
+      if (DrawContext->GuiContext->AudioPlaybackTimeout <= 0) {
+        DrawContext->GuiContext->PickerContext->PlayAudioFile (
+          DrawContext->GuiContext->PickerContext,
+          OcVoiceOverAudioFileSelected,
+          FALSE
+          );
+        DrawContext->GuiContext->PickerContext->PlayAudioEntry (
+          DrawContext->GuiContext->PickerContext,
+          DrawContext->GuiContext->BootEntry
+          );
+      }
+    }
+
     //
     // Exit early if reach timer timeout and timer isn't disabled due to key event
     //
     if (TimeOutSeconds > 0
-      && GetTimeInNanoSecond (AsmReadTsc () - LoopStartTsc) >= TimeOutSeconds * 1000000000ULL) {
-      //
-      // FIXME: There should be view function or alike.
-      //
-      mGuiContext.BootEntry = mBootPicker.SelectedEntry->Context;
+      && GetTimeInNanoSecond (NewLastTsc - LoopStartTsc) >= TimeOutSeconds * 1000000000ULL) {
+      if (DrawContext->GuiContext->PickerContext->PickerAudioAssist) {
+        DrawContext->GuiContext->PickerContext->PlayAudioFile (
+          DrawContext->GuiContext->PickerContext,
+          OcVoiceOverAudioFileTimeout,
+          FALSE
+          );
+      }
+      DrawContext->GuiContext->ReadyToBoot = TRUE;
       break;
     }
+
+    LastTsc = NewLastTsc;
   } while (!DrawContext->ExitLoop (DrawContext->GuiContext));
 }
 
@@ -1481,7 +1516,7 @@ GuiPngToImage (
   UINTN                            Index;
   UINT8                            TmpChannel;
 
-  Status = DecodePng (
+  Status = OcDecodePng (
     ImageData,
     ImageDataSize,
     (VOID **) &Image->Buffer,

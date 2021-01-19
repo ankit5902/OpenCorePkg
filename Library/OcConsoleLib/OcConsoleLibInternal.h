@@ -32,8 +32,8 @@ typedef struct {
 EFI_STATUS
 OcSetConsoleResolutionForProtocol (
   IN  EFI_GRAPHICS_OUTPUT_PROTOCOL    *GraphicsOutput,
-  IN  UINT32                          Width,
-  IN  UINT32                          Height,
+  IN  UINT32                          Width  OPTIONAL,
+  IN  UINT32                          Height OPTIONAL,
   IN  UINT32                          Bpp    OPTIONAL
   );
 
@@ -51,12 +51,12 @@ OcConsoleControlInstallProtocol (
   OUT EFI_CONSOLE_CONTROL_SCREEN_MODE  *OldMode  OPTIONAL
   );
 
-VOID
+EFI_STATUS
 OcUseBuiltinTextOutput (
-  VOID
+  IN EFI_CONSOLE_CONTROL_SCREEN_MODE  Mode
   );
 
-VOID
+EFI_STATUS
 OcUseSystemTextOutput (
   IN OC_CONSOLE_RENDERER          Renderer,
   IN BOOLEAN                      IgnoreTextOutput,

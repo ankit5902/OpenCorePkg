@@ -49,6 +49,7 @@
 #include <Library/UefiLib.h>
 
 EFI_STATUS
+EFIAPI
 OcPlayAudioFile (
   IN     OC_PICKER_CONTEXT  *Context,
   IN     UINT32             File,
@@ -138,6 +139,7 @@ OcPlayAudioFile (
 }
 
 EFI_STATUS
+EFIAPI
 OcPlayAudioBeep (
   IN     OC_PICKER_CONTEXT        *Context,
   IN     UINT32                   ToneCount,
@@ -170,12 +172,17 @@ OcPlayAudioBeep (
 }
 
 EFI_STATUS
+EFIAPI
 OcPlayAudioEntry (
   IN     OC_PICKER_CONTEXT  *Context,
   IN     OC_BOOT_ENTRY      *Entry
   )
 {
   OcPlayAudioFile (Context, OcVoiceOverAudioFileIndexBase + Entry->EntryIndex, FALSE);
+
+  if (Entry->IsExternal) {
+    OcPlayAudioFile (Context, OcVoiceOverAudioFileExternal, FALSE);
+  }
 
   if (Entry->Type == OC_BOOT_APPLE_OS) {
     OcPlayAudioFile (Context, OcVoiceOverAudioFilemacOS, FALSE);
@@ -199,18 +206,11 @@ OcPlayAudioEntry (
     OcPlayAudioFile (Context, OcVoiceOverAudioFileOtherOS, FALSE);
   }
 
-  if (Entry->IsFolder) {
-    OcPlayAudioFile (Context, OcVoiceOverAudioFileDiskImage, FALSE);
-  }
-
-  if (Entry->IsExternal) {
-    OcPlayAudioFile (Context, OcVoiceOverAudioFileExternal, FALSE);
-  }
-
   return EFI_SUCCESS;
 }
 
 VOID
+EFIAPI
 OcToggleVoiceOver (
   IN  OC_PICKER_CONTEXT  *Context,
   IN  UINT32             File  OPTIONAL

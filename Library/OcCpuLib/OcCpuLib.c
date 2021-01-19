@@ -272,6 +272,26 @@ ScanThreadCount (
 
 STATIC
 VOID
+ScanIntelProcessorApple (
+  IN OUT OC_CPU_INFO  *Cpu
+  )
+{
+  UINT8  AppleMajorType;
+
+  AppleMajorType = InternalDetectAppleMajorType (Cpu->BrandString);
+  Cpu->AppleProcessorType = InternalDetectAppleProcessorType (
+                              Cpu->Model,
+                              Cpu->Stepping,
+                              AppleMajorType,
+                              Cpu->CoreCount,
+                              (Cpu->ExtFeatures & CPUID_EXTFEATURE_EM64T) != 0
+                              );
+
+  DEBUG ((DEBUG_INFO, "OCCPU: Detected Apple Processor Type: %02X -> %04X\n", AppleMajorType, Cpu->AppleProcessorType));
+}
+
+STATIC
+VOID
 ScanIntelProcessor (
   IN OUT OC_CPU_INFO  *Cpu
   )
@@ -279,7 +299,6 @@ ScanIntelProcessor (
   UINT64                                            Msr;
   CPUID_CACHE_PARAMS_EAX                            CpuidCacheEax;
   CPUID_CACHE_PARAMS_EBX                            CpuidCacheEbx;
-  UINT8                                             AppleMajorType;
   MSR_SANDY_BRIDGE_PKG_CST_CONFIG_CONTROL_REGISTER  PkgCstConfigControl;
   MSR_IA32_PERF_STATUS_REGISTER                     PerfStatus;
   MSR_NEHALEM_PLATFORM_INFO_REGISTER                PlatformInfo;
@@ -290,13 +309,9 @@ ScanIntelProcessor (
   UINTN                                             TimerAddr;
   BOOLEAN                                           Recalculate;
 
-  AppleMajorType = InternalDetectAppleMajorType (Cpu->BrandString);
-  Cpu->AppleProcessorType = InternalDetectAppleProcessorType (Cpu->Model, Cpu->Stepping, AppleMajorType);
-
-  DEBUG ((DEBUG_INFO, "OCCPU: Detected Apple Processor Type: %02X -> %04X\n", AppleMajorType, Cpu->AppleProcessorType));
-
   if ((Cpu->Family != 0x06 || Cpu->Model < 0x0c)
     && (Cpu->Family != 0x0f || Cpu->Model < 0x03)) {
+    ScanIntelProcessorApple (Cpu);
     return;
   }
 
@@ -350,7 +365,9 @@ ScanIntelProcessor (
 
     if (Cpu->Model >= CPU_MODEL_NEHALEM
       && Cpu->Model != CPU_MODEL_NEHALEM_EX
-      && Cpu->Model != CPU_MODEL_WESTMERE_EX) {
+      && Cpu->Model != CPU_MODEL_WESTMERE_EX
+      && Cpu->Model != CPU_MODEL_BONNELL
+      && Cpu->Model != CPU_MODEL_BONNELL_MID) {
       TurboLimit.Uint64 = AsmReadMsr64 (MSR_NEHALEM_TURBO_RATIO_LIMIT);
       Cpu->TurboBusRatio1 = (UINT8) TurboLimit.Bits.Maximum1C;
       Cpu->TurboBusRatio2 = (UINT8) TurboLimit.Bits.Maximum2C;
@@ -433,10 +450,14 @@ ScanIntelProcessor (
     }
   }
   //
-  // Calculate number of cores
+  // Calculate number of cores.
   // If we are under virtualization, then we should get the topology from CPUID the same was as with Penryn.
   //
-  if (Cpu->MaxId >= CPUID_CACHE_PARAMS && (Cpu->Model <= CPU_MODEL_PENRYN || Cpu->Hypervisor)) {
+  if (Cpu->MaxId >= CPUID_CACHE_PARAMS
+    && (Cpu->Model <= CPU_MODEL_PENRYN
+    || Cpu->Model == CPU_MODEL_BONNELL
+    || Cpu->Model == CPU_MODEL_BONNELL_MID
+    || Cpu->Hypervisor)) {
     AsmCpuidEx (CPUID_CACHE_PARAMS, 0, &CpuidCacheEax.Uint32, &CpuidCacheEbx.Uint32, NULL, NULL);
     if (CpuidCacheEax.Bits.CacheType != CPUID_CACHE_PARAMS_CACHE_TYPE_NULL) {
       CoreCount = (UINT16)GetPowerOfTwo32 (CpuidCacheEax.Bits.MaximumAddressableIdsForProcessorCores + 1);
@@ -456,6 +477,13 @@ ScanIntelProcessor (
     Msr = AsmReadMsr64 (MSR_CORE_THREAD_COUNT);
     Cpu->CoreCount   = (UINT16)BitFieldRead64 (Msr, 16, 19);
     Cpu->ThreadCount = (UINT16)BitFieldRead64 (Msr, 0,  15);
+  } else if (Cpu->Model == CPU_MODEL_BANIAS || Cpu->Model == CPU_MODEL_DOTHAN) {
+    //
+    // Banias and Dothan (Pentium M and Celeron M) never had
+    // multiple cores or threads, and do not support the MSR below.
+    //
+    Cpu->CoreCount   = 0;
+    Cpu->ThreadCount = 0;
   } else {
     Msr = AsmReadMsr64 (MSR_CORE_THREAD_COUNT);
     Cpu->CoreCount   = (UINT16)BitFieldRead64 (Msr, 16, 31);
@@ -469,6 +497,8 @@ ScanIntelProcessor (
   if (Cpu->ThreadCount == 0) {
     Cpu->ThreadCount = 1;
   }
+
+  ScanIntelProcessorApple (Cpu);
 }
 
 STATIC
@@ -529,6 +559,7 @@ ScanAmdProcessor (
 
     switch (Cpu->ExtFamily) {
       case AMD_CPU_EXT_FAMILY_17H:
+      case AMD_CPU_EXT_FAMILY_19H:
         if (Cpu->CPUFrequencyFromVMT == 0) {
           CofVid           = AsmReadMsr64 (K10_PSTATE_STATUS);
           CoreFrequencyID  = (UINT8)BitFieldRead64 (CofVid, 0, 7);
@@ -716,6 +747,21 @@ OcCpuScanProcessor (
     if (Cpu->Features & CPUID_FEATURE_HTT) {
       Cpu->ThreadCount = (UINT16) Cpu->CpuidVerEbx.Bits.MaximumAddressableIdsForLogicalProcessors;
     }
+  }
+
+  //
+  // Get extended processor signature.
+  //
+  if (Cpu->MaxExtId >= CPUID_EXTENDED_CPU_SIG) {
+    AsmCpuid (
+      CPUID_EXTENDED_CPU_SIG,
+      &CpuidEax,
+      &CpuidEbx,
+      &Cpu->CpuidExtSigEcx.Uint32,
+      &Cpu->CpuidExtSigEdx.Uint32
+      );
+
+    Cpu->ExtFeatures = LShiftU64 (Cpu->CpuidExtSigEcx.Uint32, 32) | Cpu->CpuidExtSigEdx.Uint32;
   }
 
   DEBUG ((DEBUG_INFO, "OCCPU: Found %a\n", Cpu->BrandString));

@@ -39,6 +39,7 @@
   OpenCoreAcpi.c
   OpenCoreDevProps.c
   OpenCoreKernel.c
+  OpenCoreKernelPatch.c
   OpenCoreMisc.c
   OpenCoreNvram.c
   OpenCorePlatform.c
@@ -58,6 +59,7 @@
   gOcVendorVariableGuid
 
 [Protocols]
+  gEfiAudioDecodeProtocolGuid         ## SOMETIMES_CONSUMES
   gEfiDevicePathProtocolGuid          ## CONSUMES
   gEfiDevicePathProtocolGuid          ## CONSUMES
   gEfiLoadedImageProtocolGuid         ## CONSUMES
@@ -76,8 +78,10 @@
   OcAppleImageConversionLib
   OcAudioLib
   OcInputLib
+  OcAppleImg4Lib
   OcAppleKernelLib
   OcAppleKeyMapLib
+  OcAppleSecureBootLib
   OcAppleUserInterfaceThemeLib
   OcBootManagementLib
   OcConfigurationLib
@@ -100,6 +104,7 @@
   OcMacInfoLib
   PcdLib
   PrintLib
+  SerialPortLib
   UefiBootServicesTableLib
   UefiDriverEntryPoint
   UefiLib

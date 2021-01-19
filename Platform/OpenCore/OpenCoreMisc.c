@@ -14,6 +14,7 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 
 #include <OpenCore.h>
 
+#include <Guid/AppleVariable.h>
 #include <Guid/OcVariable.h>
 
 #include <Library/BaseLib.h>
@@ -22,11 +23,13 @@ WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
 #include <Library/MemoryAllocationLib.h>
 #include <Library/OcAcpiLib.h>
 #include <Library/OcAppleBootPolicyLib.h>
+#include <Library/OcAudioLib.h>
 #include <Library/OcConsoleLib.h>
 #include <Library/OcDebugLogLib.h>
 #include <Library/OcSmbiosLib.h>
 #include <Library/OcStringLib.h>
 #include <Library/PrintLib.h>
+#include <Library/SerialPortLib.h>
 #include <Library/UefiBootServicesTableLib.h>
 #include <Library/UefiRuntimeServicesTableLib.h>
 
@@ -138,7 +141,7 @@ ProduceDebugReport (
     Status = AcpiDumpTables (SubReport);
     SubReport->Close (SubReport);
   }
-  DEBUG ((DEBUG_INFO, "OC: ACPI dumping - %r\n", Status)); 
+  DEBUG ((DEBUG_INFO, "OC: ACPI dumping - %r\n", Status));
 
   Status = SafeFileOpen (
     SysReport,
@@ -152,7 +155,21 @@ ProduceDebugReport (
     Status = OcSmbiosDump (SubReport);
     SubReport->Close (SubReport);
   }
-  DEBUG ((DEBUG_INFO, "OC: ACPI dumping - %r\n", Status)); 
+  DEBUG ((DEBUG_INFO, "OC: SMBIOS dumping - %r\n", Status));
+
+  Status = SafeFileOpen (
+    SysReport,
+    &SubReport,
+    L"Audio",
+    EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE | EFI_FILE_MODE_CREATE,
+    EFI_FILE_DIRECTORY
+    );
+  if (!EFI_ERROR (Status)) {
+    DEBUG ((DEBUG_INFO, "OC: Dumping audio for report...\n"));
+    Status = OcAudioDump (SubReport);
+    SubReport->Close (SubReport);
+  }
+  DEBUG ((DEBUG_INFO, "OC: Audio dumping - %r\n", Status));
 
   SysReport->Close (SysReport);
   Fs->Close (Fs);
@@ -168,9 +185,9 @@ OcToolLoadEntry (
   IN  OC_BOOT_ENTRY               *ChosenEntry,
   OUT VOID                        **Data,
   OUT UINT32                      *DataSize,
-  OUT EFI_DEVICE_PATH_PROTOCOL    **DevicePath         OPTIONAL,
-  OUT EFI_HANDLE                  *ParentDeviceHandle  OPTIONAL,
-  OUT EFI_DEVICE_PATH_PROTOCOL    **ParentFilePath     OPTIONAL
+  OUT EFI_DEVICE_PATH_PROTOCOL    **DevicePath,
+  OUT EFI_HANDLE                  *StorageHandle,
+  OUT EFI_DEVICE_PATH_PROTOCOL    **StoragePath
   )
 {
   EFI_STATUS          Status;
@@ -202,23 +219,25 @@ OcToolLoadEntry (
     );
   if (*Data == NULL) {
     DEBUG ((
-      DEBUG_ERROR,
+      DEBUG_WARN,
       "OC: Tool %s cannot be found!\n",
       ToolPath
       ));
     return EFI_NOT_FOUND;
   }
 
-  if (DevicePath != NULL) {
-    *DevicePath = Storage->DummyDevicePath;
-  }
-
-  if (ParentDeviceHandle != NULL) {
-    *ParentDeviceHandle = Storage->StorageHandle;
-  }
-
-  if (ParentFilePath != NULL) {
-    *ParentFilePath = Storage->DummyFilePath;
+  Status = OcStorageGetInfo (
+    Storage,
+    ToolPath,
+    DevicePath,
+    StorageHandle,
+    StoragePath,
+    ChosenEntry->ExposeDevicePath
+    );
+  if (!EFI_ERROR (Status)) {
+    DEBUG ((DEBUG_INFO, "OC: Returning tool %s\n", ToolPath));
+    DebugPrintDevicePath (DEBUG_INFO, "OC: Tool path", *DevicePath);
+    DebugPrintDevicePath (DEBUG_INFO, "OC: Storage path", *StoragePath);
   }
 
   return EFI_SUCCESS;
@@ -536,6 +555,10 @@ OcMiscEarlyInit (
     gBS->SetWatchdogTimer (0, 0, 0, NULL);
   }
 
+  if (Config->Misc.Debug.SerialInit) {
+    SerialPortInitialize ();
+  }
+
   OcConfigureLogProtocol (
     Config->Misc.Debug.Target,
     Config->Misc.Debug.DisplayDelay,
@@ -577,43 +600,80 @@ OcMiscEarlyInit (
   return EFI_SUCCESS;
 }
 
-EFI_STATUS
+/**
+  Registers Bootstrap according to the BootProtect mode.
+
+  @param[in]  RootPath     Root load path.
+  @param[in]  LoadHandle   OpenCore loading handle.
+  @param[in]  BootProtect  Value of the BootProtect config option.
+
+  @returns  BootProtect bitmask.
+**/
+STATIC
+UINT32
+RegisterBootstrap (
+  IN CONST CHAR16  *RootPath OPTIONAL,
+  IN  EFI_HANDLE   LoadHandle OPTIONAL,
+  IN CONST CHAR8   *BootProtect
+  )
+{
+  CHAR16  *BootstrapPath;
+  UINTN   BootstrapSize;
+  BOOLEAN ShortForm;
+
+  if (LoadHandle != NULL) {
+    //
+    // Full-form paths cause entry duplication on e.g. HP 15-ab237ne, InsydeH2O.
+    //
+    if (AsciiStrCmp (BootProtect, "Bootstrap") == 0) {
+      ShortForm = FALSE;
+    } else if (AsciiStrCmp (BootProtect, "BootstrapShort") == 0) {
+      ShortForm = TRUE;
+    } else {
+      return 0;
+    }
+
+    ASSERT (RootPath != NULL);
+    BootstrapSize = StrSize (RootPath) + StrSize (OPEN_CORE_BOOTSTRAP_PATH);
+    BootstrapPath = AllocatePool (BootstrapSize);
+    if (BootstrapPath != NULL) {
+      UnicodeSPrint (BootstrapPath, BootstrapSize, L"%s\\%s", RootPath, OPEN_CORE_BOOTSTRAP_PATH);
+      OcRegisterBootstrapBootOption (
+        L"OpenCore",
+        LoadHandle,
+        BootstrapPath,
+        ShortForm,
+        OPEN_CORE_BOOTSTRAP_PATH,
+        L_STR_LEN (OPEN_CORE_BOOTSTRAP_PATH)
+        );
+      FreePool (BootstrapPath);
+      return OC_BOOT_PROTECT_VARIABLE_BOOTSTRAP;
+    }
+  }
+
+  return 0;
+}
+
+VOID
 OcMiscMiddleInit (
   IN  OC_STORAGE_CONTEXT        *Storage,
   IN  OC_GLOBAL_CONFIG          *Config,
+  IN  CONST CHAR16              *RootPath  OPTIONAL,
   IN  EFI_DEVICE_PATH_PROTOCOL  *LoadPath  OPTIONAL,
-  OUT EFI_HANDLE                *LoadHandle
+  IN  EFI_HANDLE                LoadHandle OPTIONAL
   )
 {
-  EFI_STATUS   Status;
   CONST CHAR8  *BootProtect;
   UINT32       BootProtectFlag;
-  EFI_HANDLE   OcHandle;
 
   if ((Config->Misc.Security.ExposeSensitiveData & OCS_EXPOSE_BOOT_PATH) != 0) {
     OcStoreLoadPath (LoadPath);
   }
 
-  OcHandle = NULL;
-  if (LoadPath != NULL) {
-    Status = gBS->LocateDevicePath (
-      &gEfiSimpleFileSystemProtocolGuid,
-      &LoadPath,
-      &OcHandle
-      );
-  } else {
-    Status = EFI_UNSUPPORTED;
-  }
-
   BootProtect = OC_BLOB_GET (&Config->Misc.Security.BootProtect);
-  DEBUG ((DEBUG_INFO, "OC: LoadHandle %p with BootProtect in %a mode - %r\n", OcHandle, BootProtect, Status));
+  DEBUG ((DEBUG_INFO, "OC: LoadHandle %p with BootProtect in %a mode\n", LoadHandle, BootProtect));
 
-  BootProtectFlag = Config->Uefi.Quirks.RequestBootVarRouting ? OC_BOOT_PROTECT_VARIABLE_NAMESPACE : 0;
-
-  if (OcHandle != NULL && AsciiStrCmp (BootProtect, "Bootstrap") == 0) {
-    OcRegisterBootOption (L"OpenCore", OcHandle, OPEN_CORE_BOOTSTRAP_PATH);
-    BootProtectFlag = OC_BOOT_PROTECT_VARIABLE_BOOTSTRAP;
-  }
+  BootProtectFlag = RegisterBootstrap (RootPath, LoadHandle, BootProtect);
 
   //
   // Inform about boot protection.
@@ -625,16 +685,6 @@ OcMiscMiddleInit (
     sizeof (BootProtectFlag),
     &BootProtectFlag
     );
-
-  *LoadHandle = OcHandle;
-
-  DEBUG_CODE_BEGIN ();
-  if (OcHandle != NULL && Config->Misc.Debug.SysReport) {
-    ProduceDebugReport (OcHandle);
-  }
-  DEBUG_CODE_END ();
-
-  return Status;
 }
 
 EFI_STATUS
@@ -677,6 +727,17 @@ OcMiscLateInit (
 }
 
 VOID
+OcMiscLoadSystemReport (
+  IN  OC_GLOBAL_CONFIG          *Config,
+  IN  EFI_HANDLE                LoadHandle OPTIONAL
+  )
+{
+  if (LoadHandle != NULL && Config->Misc.Debug.SysReport) {
+    ProduceDebugReport (LoadHandle);
+  }
+}
+
+VOID
 OcMiscBoot (
   IN  OC_STORAGE_CONTEXT        *Storage,
   IN  OC_GLOBAL_CONFIG          *Config,
@@ -690,6 +751,7 @@ OcMiscBoot (
   OC_PICKER_CONTEXT      *Context;
   OC_PICKER_CMD          PickerCommand;
   OC_PICKER_MODE         PickerMode;
+  OC_DMG_LOADING_SUPPORT DmgLoading;
   UINTN                  ContextSize;
   UINT32                 Index;
   UINT32                 EntryIndex;
@@ -697,6 +759,8 @@ OcMiscBoot (
   UINTN                  BlessOverrideSize;
   CHAR16                 **BlessOverride;
   CONST CHAR8            *AsciiPicker;
+  CONST CHAR8            *AsciiPickerVariant;
+  CONST CHAR8            *AsciiDmg;
 
   AsciiPicker = OC_BLOB_GET (&Config->Misc.Boot.PickerMode);
 
@@ -707,8 +771,23 @@ OcMiscBoot (
   } else if (AsciiStrCmp (AsciiPicker, "Apple") == 0) {
     PickerMode = OcPickerModeApple;
   } else {
-    DEBUG ((DEBUG_WARN, "OC: Unknown PickirMode: %a, using builtin\n", AsciiPicker));
+    DEBUG ((DEBUG_WARN, "OC: Unknown PickerMode: %a, using builtin\n", AsciiPicker));
     PickerMode = OcPickerModeBuiltin;
+  }
+
+  AsciiPickerVariant = OC_BLOB_GET (&Config->Misc.Boot.PickerVariant);
+
+  AsciiDmg = OC_BLOB_GET (&Config->Misc.Security.DmgLoading);
+
+  if (AsciiStrCmp (AsciiDmg, "Disabled") == 0) {
+    DmgLoading = OcDmgLoadingDisabled;
+  } else if (AsciiStrCmp (AsciiDmg, "Any") == 0) {
+    DmgLoading = OcDmgLoadingAnyImage;
+  } else if (AsciiStrCmp (AsciiDmg, "Signed") == 0) {
+    DmgLoading = OcDmgLoadingAppleSigned;
+  } else {
+    DEBUG ((DEBUG_WARN, "OC: Unknown DmgLoading: %a, using Signed\n", AsciiDmg));
+    DmgLoading = OcDmgLoadingAppleSigned;
   }
 
   //
@@ -799,7 +878,7 @@ OcMiscBoot (
   }
 
   Context->ScanPolicy            = Config->Misc.Security.ScanPolicy;
-  Context->LoadPolicy            = OC_LOAD_DEFAULT_POLICY;
+  Context->DmgLoading            = DmgLoading;
   Context->TimeoutSeconds        = Config->Misc.Boot.Timeout;
   Context->TakeoffDelay          = Config->Misc.Boot.TakeoffDelay;
   Context->StartImage            = StartImage;
@@ -811,15 +890,29 @@ OcMiscBoot (
   Context->PrivilegeContext      = Privilege;
   Context->RequestPrivilege      = OcShowSimplePasswordRequest;
   Context->ShowMenu              = OcShowSimpleBootMenu;
+  Context->GetEntryLabelImage    = OcGetBootEntryLabelImage;
+  Context->GetEntryIcon          = OcGetBootEntryIcon;
+  Context->GetKeyIndex           = OcGetAppleKeyIndex;
+  Context->PlayAudioFile         = OcPlayAudioFile;
+  Context->PlayAudioBeep         = OcPlayAudioBeep;
+  Context->PlayAudioEntry        = OcPlayAudioEntry;
+  Context->ToggleVoiceOver       = OcToggleVoiceOver;
   Context->PickerMode            = PickerMode;
   Context->ConsoleAttributes     = Config->Misc.Boot.ConsoleAttributes;
   Context->PickerAttributes      = Config->Misc.Boot.PickerAttributes;
+  Context->PickerVariant         = AsciiPickerVariant;
+  Context->BlacklistAppleUpdate  = Config->Misc.Security.BlacklistAppleUpdate;
 
   if ((Config->Misc.Security.ExposeSensitiveData & OCS_EXPOSE_VERSION_UI) != 0) {
     Context->TitleSuffix      = OcMiscGetVersionString ();
   }
 
-  if (Config->Misc.Boot.ShowPicker) {
+  Status = OcHandleRecoveryRequest (
+    &Context->RecoveryInitiator
+    );
+  if (!EFI_ERROR (Status)) {
+    PickerCommand = Context->PickerCommand = OcPickerBootAppleRecovery;
+  } else if (Config->Misc.Boot.ShowPicker) {
     PickerCommand = Context->PickerCommand = OcPickerShowPicker;
   } else {
     PickerCommand = Context->PickerCommand = OcPickerDefault;
@@ -832,6 +925,8 @@ OcMiscBoot (
       Context->CustomEntries[EntryIndex].Arguments = OC_BLOB_GET (&Config->Misc.Entries.Values[Index]->Arguments);
       Context->CustomEntries[EntryIndex].Auxiliary = Config->Misc.Entries.Values[Index]->Auxiliary;
       Context->CustomEntries[EntryIndex].Tool      = FALSE;
+      Context->CustomEntries[EntryIndex].TextMode  = Config->Misc.Entries.Values[Index]->TextMode;
+      Context->CustomEntries[EntryIndex].RealPath  = TRUE; ///< Always true for entries
       ++EntryIndex;
     }
   }
@@ -848,6 +943,8 @@ OcMiscBoot (
       Context->CustomEntries[EntryIndex].Arguments = OC_BLOB_GET (&Config->Misc.Tools.Values[Index]->Arguments);
       Context->CustomEntries[EntryIndex].Auxiliary = Config->Misc.Tools.Values[Index]->Auxiliary;
       Context->CustomEntries[EntryIndex].Tool      = TRUE;
+      Context->CustomEntries[EntryIndex].TextMode  = Config->Misc.Tools.Values[Index]->TextMode;
+      Context->CustomEntries[EntryIndex].RealPath  = Config->Misc.Tools.Values[Index]->RealPath;
       ++EntryIndex;
     }
   }
@@ -868,15 +965,13 @@ OcMiscBoot (
   }
 
   if (Interface != NULL) {
-    Status = Interface->ShowInteface (Interface, Storage, Context);
-    DEBUG ((DEBUG_WARN, "OC: External interface failure, fallback to builtin - %r\n", Status));
-  } else {
-    Status = EFI_UNSUPPORTED;
+    Status = Interface->PopulateContext (Interface, Storage, Context);
+    if (EFI_ERROR (Status)) {
+      DEBUG ((DEBUG_WARN, "OC: External interface failure, fallback to builtin - %r\n", Status));
+    }
   }
 
-  if (EFI_ERROR (Status)) {
-    Status = OcRunBootPicker (Context);
-  }
+  Status = OcRunBootPicker (Context);
 
   if (EFI_ERROR (Status)) {
     DEBUG ((DEBUG_ERROR, "OC: Failed to show boot menu!\n"));
